@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69", "wheel>=0.45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rate-agent-03abctempo"
+version = "0.1.0"
+description = "MVP Rate Agent using Tempo MPP Alpha Vantage rates and Telegram"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

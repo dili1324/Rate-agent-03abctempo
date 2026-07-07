@@ -1,0 +1,83 @@
+name: Rate Agent
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-rate-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RATE_SOURCE: ${{ vars.RATE_SOURCE || 'alphavantage' }}
+      RATE_PAYMENT_MODE: ${{ vars.RATE_PAYMENT_MODE || 'mppx' }}
+      BASE_CURRENCY: ${{ vars.BASE_CURRENCY || 'USD' }}
+      QUOTE_CURRENCY: ${{ vars.QUOTE_CURRENCY || 'VND' }}
+      TIMEZONE: ${{ vars.TIMEZONE || 'Asia/Ho_Chi_Minh' }}
+      MPP_MAX_SPEND_USD: ${{ vars.MPP_MAX_SPEND_USD || '0.05' }}
+      MPPX_COMMAND_TIMEOUT_SECONDS: ${{ vars.MPPX_COMMAND_TIMEOUT_SECONDS || '120' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: node_mppx/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade setuptools wheel
+          python -m pip install -r requirements-lock.txt
+          python -m pip install --no-build-isolation -e .
+
+      - name: Install Node dependencies
+        working-directory: node_mppx
+        run: npm ci
+
+      - name: Install Tempo CLI
+        run: |
+          curl -fsSL https://tempo.xyz/install | bash
+          echo "$HOME/.tempo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore Tempo accounts CLI store
+        env:
+          TEMPO_ACCOUNTS_CLI_STORE_B64_PART1: ${{ secrets.TEMPO_ACCOUNTS_CLI_STORE_B64_PART1 }}
+          TEMPO_ACCOUNTS_CLI_STORE_B64_PART2: ${{ secrets.TEMPO_ACCOUNTS_CLI_STORE_B64_PART2 }}
+        run: |
+          test -n "$TEMPO_ACCOUNTS_CLI_STORE_B64_PART1"
+          mkdir -p "$HOME/.tempo/wallet"
+          chmod 700 "$HOME/.tempo"
+          chmod 700 "$HOME/.tempo/wallet"
+          printf '%s%s' "$TEMPO_ACCOUNTS_CLI_STORE_B64_PART1" "$TEMPO_ACCOUNTS_CLI_STORE_B64_PART2" | base64 --decode > "$HOME/.tempo/wallet/store.json"
+          chmod 600 "$HOME/.tempo/wallet/store.json"
+          echo "Tempo wallet store restored"
+
+      - name: Check restored Tempo wallet
+        run: |
+          set +e
+          tempo wallet --format json whoami > /tmp/tempo-whoami.stdout 2> /tmp/tempo-whoami.stderr
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "tempo wallet whoami failed with exit_code=$code"
+            echo "stdout:"
+            python scripts/redact_ci_log.py /tmp/tempo-whoami.stdout
+            echo "stderr:"
+            python scripts/redact_ci_log.py /tmp/tempo-whoami.stderr
+            exit "$code"
+          fi
+          python scripts/check_tempo_whoami.py /tmp/tempo-whoami.stdout /tmp/tempo-whoami.stderr
+
+      - name: Run Rate Agent
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m rate_agent
